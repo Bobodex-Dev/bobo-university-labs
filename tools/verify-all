@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Runs every check a lab depends on. Nothing new is built on a red tree.
+#   1. the installed tools match TOOLCHAIN.md exactly
+#   2. every fixture matches its recorded sha256
+#   3. every program builds for SBF
+#   4. every test passes
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+fail() { echo "verify-all: $*" >&2; exit 1; }
+
+want() {
+  local name="$1" expected="$2" actual="$3"
+  [[ "$actual" == *"$expected"* ]] || fail "$name is '$actual', TOOLCHAIN.md pins $expected"
+  echo "ok  $name $expected"
+}
+
+want rustc "rustc 1.99.0" "$(rustc --version)"
+want solana "solana-cli 4.3.0" "$(solana --version)"
+want cargo-build-sbf "cargo-build-sbf 4.3.0" "$(cargo-build-sbf --version | head -1)"
+want anchor "anchor-cli 1.2.1" "$(anchor --version)"
+want surfpool "surfpool 1.6.0" "$(surfpool --version)"
+want node "v24." "$(node --version)"
+
+(cd fixtures && sha256sum --quiet -c mpl_core.so.sha256) || fail "fixtures/mpl_core.so does not match its hash"
+echo "ok  fixtures"
+
+for manifest in tools/toolchain-probe/Cargo.toml programs/*/Cargo.toml; do
+  [[ -f "$manifest" ]] || continue
+  out=$(cargo build-sbf --manifest-path "$manifest" 2>&1) || { echo "$out" | tail -30 >&2; fail "build-sbf failed for $manifest"; }
+  echo "ok  build-sbf ${manifest%/Cargo.toml}"
+done
+out=$(cargo test --workspace 2>&1) || { echo "$out" | tail -40 >&2; fail "tests failed"; }
+echo "$out" | grep -E "^test result" | sed 's/^/ok  /'
+echo "verify-all: green"
